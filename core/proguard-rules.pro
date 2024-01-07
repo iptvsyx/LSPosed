@@ -1,27 +1,28 @@
 -keep class de.robv.android.xposed.** {*;}
+-keep class io.github.libxposed.** {*;}
+-keepattributes RuntimeVisibleAnnotations
 -keep class android.** { *; }
--keepclasseswithmembers class org.lsposed.lspd.core.Main {
-    public static void forkSystemServerPost(android.os.IBinder);
-    public static void forkAndSpecializePost(java.lang.String, java.lang.String, android.os.IBinder);
-    public static void main(java.lang.String[]);
-}
 -keepclasseswithmembers,includedescriptorclasses class * {
     native <methods>;
 }
--keepclasseswithmembers class org.lsposed.lspd.nativebridge.ClassLinker {
-    public static void onPostFixupStaticTrampolines(java.lang.Class);
+-keepclassmembers class org.lsposed.lspd.impl.LSPosedContext {
+    public <methods>;
 }
--keepclasseswithmembers class org.lsposed.lspd.service.BridgeService {
-    public static boolean *(android.os.IBinder, int, long, long, int);
-    public static android.os.IBinder getApplicationServiceForSystemServer(android.os.IBinder, android.os.IBinder);
+-keepclassmembers class org.lsposed.lspd.impl.LSPosedHookCallback {
+    public <methods>;
 }
--keepclasseswithmembers class org.lsposed.lspd.service.LogcatService {
-    private int refreshFd(boolean);
+-keep,allowoptimization,allowobfuscation @io.github.libxposed.api.annotations.* class * {
+    @io.github.libxposed.api.annotations.BeforeInvocation <methods>;
+    @io.github.libxposed.api.annotations.AfterInvocation <methods>;
 }
-
--keepclassmembers class ** implements android.content.ContextWrapper {
-    public int getUserId();
-    public android.os.UserHandle getUser();
+-keepclassmembers class org.lsposed.lspd.impl.LSPosedBridge$NativeHooker {
+    <init>(java.lang.reflect.Executable);
+    callback(...);
+}
+-keepclassmembers class org.lsposed.lspd.impl.LSPosedBridge$HookerCallback {
+    final *** beforeInvocation;
+    final *** afterInvocation;
+    HookerCallback(...);
 }
 -assumenosideeffects class android.util.Log {
     public static *** v(...);

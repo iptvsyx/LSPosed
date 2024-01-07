@@ -29,11 +29,14 @@ import org.lsposed.manager.App;
 import org.lsposed.manager.ConfigManager;
 import org.lsposed.manager.adapters.ScopeAdapter;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
+
+import rikka.core.os.FileUtils;
 
 public class BackupUtils {
     private static final int VERSION = 2;
@@ -47,6 +50,7 @@ public class BackupUtils {
         rootObject.put("version", VERSION);
         JSONArray modulesArray = new JSONArray();
         var modules = ModuleUtil.getInstance().getModules();
+        if (modules == null) return;
         for (ModuleUtil.InstalledModule module : modules.values()) {
             if (packageName != null && !module.packageName.equals(packageName)) {
                 continue;
@@ -78,10 +82,9 @@ public class BackupUtils {
     public static void restore(Uri uri, String packageName) throws IOException, JSONException {
         try (GZIPInputStream gzipInputStream = new GZIPInputStream(App.getInstance().getContentResolver().openInputStream(uri), 32)) {
             StringBuilder string = new StringBuilder();
-            byte[] data = new byte[32];
-            int bytesRead;
-            while ((bytesRead = gzipInputStream.read(data)) != -1) {
-                string.append(new String(data, 0, bytesRead));
+            try (var os = new ByteArrayOutputStream()) {
+                FileUtils.copy(gzipInputStream, os);
+                string.append(os);
             }
             gzipInputStream.close();
             JSONObject rootObject = new JSONObject(string.toString());
@@ -96,7 +99,9 @@ public class BackupUtils {
                     }
                     ModuleUtil.InstalledModule module = ModuleUtil.getInstance().getModule(name);
                     if (module != null) {
-                        ModuleUtil.getInstance().setModuleEnabled(name, moduleObject.getBoolean("enable"));
+                        var enabled = moduleObject.getBoolean("enable");
+                        ModuleUtil.getInstance().setModuleEnabled(name, enabled);
+                        if (!enabled) continue;
                         JSONArray scopeArray = moduleObject.getJSONArray("scope");
                         HashSet<ScopeAdapter.ApplicationWithEquals> scope = new HashSet<>();
                         for (int j = 0; j < scopeArray.length(); j++) {
@@ -107,7 +112,7 @@ public class BackupUtils {
                                 scope.add(new ScopeAdapter.ApplicationWithEquals(scopeArray.getString(j), 0));
                             }
                         }
-                        ConfigManager.setModuleScope(name, scope);
+                        ConfigManager.setModuleScope(name, module.legacy, scope);
                     }
                 }
             } else {

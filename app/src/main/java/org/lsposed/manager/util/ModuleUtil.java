@@ -25,40 +25,62 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Build;
+import android.text.TextUtils;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.core.util.Pair;
 
+import org.lsposed.lspd.models.UserInfo;
 import org.lsposed.manager.App;
 import org.lsposed.manager.ConfigManager;
 import org.lsposed.manager.repo.RepoLoader;
 import org.lsposed.manager.repo.model.OnlineModule;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+import java.util.zip.ZipFile;
 
 public final class ModuleUtil {
     // xposedminversion below this
     public static int MIN_MODULE_VERSION = 2; // reject modules with
     private static ModuleUtil instance = null;
     private final PackageManager pm;
-    private final List<ModuleListener> listeners = new CopyOnWriteArrayList<>();
+    private final Set<ModuleListener> listeners = ConcurrentHashMap.newKeySet();
     private HashSet<String> enabledModules = new HashSet<>();
+    private List<UserInfo> users = new ArrayList<>();
     private Map<Pair<String, Integer>, InstalledModule> installedModules = new HashMap<>();
-    private boolean isReloading = false;
+    private boolean modulesLoaded = false;
+
+    static final int MATCH_ANY_USER = 0x00400000; // PackageManager.MATCH_ANY_USER
+
+    static final int MATCH_ALL_FLAGS = PackageManager.MATCH_DISABLED_COMPONENTS | PackageManager.MATCH_DIRECT_BOOT_AWARE | PackageManager.MATCH_DIRECT_BOOT_UNAWARE | PackageManager.MATCH_UNINSTALLED_PACKAGES | MATCH_ANY_USER;
 
     private ModuleUtil() {
         pm = App.getInstance().getPackageManager();
     }
 
+    public boolean isModulesLoaded() {
+        return modulesLoaded;
+    }
+
     public static synchronized ModuleUtil getInstance() {
         if (instance == null) {
             instance = new ModuleUtil();
-            instance.reloadInstalledModules();
+            App.getExecutorService().submit(instance::reloadInstalledModules);
         }
         return instance;
     }
@@ -75,36 +97,61 @@ public final class ModuleUtil {
         return result;
     }
 
-    public void reloadInstalledModules() {
-        synchronized (this) {
-            if (isReloading)
-                return;
-            isReloading = true;
-        }
-        if (!ConfigManager.isBinderAlive()) {
-            synchronized (this) {
-                isReloading = false;
+    public static ZipFile getModernModuleApk(ApplicationInfo info) {
+        String[] apks;
+        if (info.splitSourceDirs != null) {
+            apks = Arrays.copyOf(info.splitSourceDirs, info.splitSourceDirs.length + 1);
+            apks[info.splitSourceDirs.length] = info.sourceDir;
+        } else apks = new String[]{info.sourceDir};
+        ZipFile zip = null;
+        for (var apk : apks) {
+            try {
+                zip = new ZipFile(apk);
+                if (zip.getEntry("META-INF/xposed/java_init.list") != null) {
+                    return zip;
+                }
+                zip.close();
+                zip = null;
+            } catch (IOException ignored) {
             }
+        }
+        return zip;
+    }
+
+    public static boolean isLegacyModule(ApplicationInfo info) {
+        return info.metaData != null && info.metaData.containsKey("xposedminversion");
+    }
+
+    synchronized public void reloadInstalledModules() {
+        modulesLoaded = false;
+        if (!ConfigManager.isBinderAlive()) {
+            modulesLoaded = true;
             return;
         }
 
         Map<Pair<String, Integer>, InstalledModule> modules = new HashMap<>();
-        for (PackageInfo pkg : ConfigManager.getInstalledPackagesFromAllUsers(PackageManager.GET_META_DATA, false)) {
+        var users = ConfigManager.getUsers();
+        for (PackageInfo pkg : ConfigManager.getInstalledPackagesFromAllUsers(PackageManager.GET_META_DATA | MATCH_ALL_FLAGS, false)) {
             ApplicationInfo app = pkg.applicationInfo;
 
-            if (app.metaData != null && app.metaData.containsKey("xposedminversion")) {
-                InstalledModule installed = new InstalledModule(pkg);
-                modules.put(Pair.create(pkg.packageName, app.uid / 100000), installed);
+            var modernApk = getModernModuleApk(app);
+            if (modernApk != null || isLegacyModule(app)) {
+                modules.computeIfAbsent(Pair.create(pkg.packageName, app.uid / App.PER_USER_RANGE), k -> new InstalledModule(pkg, modernApk));
             }
         }
 
         installedModules = modules;
 
-        enabledModules = new HashSet<>(Arrays.asList(ConfigManager.getEnabledModules()));
+        this.users = users;
 
-        synchronized (this) {
-            isReloading = false;
-        }
+        enabledModules = new HashSet<>(Arrays.asList(ConfigManager.getEnabledModules()));
+        modulesLoaded = true;
+        listeners.forEach(ModuleListener::onModulesReloaded);
+    }
+
+    @Nullable
+    public List<UserInfo> getUsers() {
+        return modulesLoaded ? users : null;
     }
 
     public InstalledModule reloadSingleModule(String packageName, int userId) {
@@ -112,51 +159,47 @@ public final class ModuleUtil {
     }
 
     public InstalledModule reloadSingleModule(String packageName, int userId, boolean packageFullyRemoved) {
-        if (packageFullyRemoved && isModuleEnabled(packageName))
+        if (packageFullyRemoved && isModuleEnabled(packageName)) {
             enabledModules.remove(packageName);
+            listeners.forEach(ModuleListener::onModulesReloaded);
+        }
         PackageInfo pkg;
 
         try {
             pkg = ConfigManager.getPackageInfo(packageName, PackageManager.GET_META_DATA, userId);
         } catch (NameNotFoundException e) {
             InstalledModule old = installedModules.remove(Pair.create(packageName, userId));
-            if (old != null) {
-                for (ModuleListener listener : listeners) {
-                    listener.onSingleInstalledModuleReloaded();
-                }
-            }
+            if (old != null) listeners.forEach(i -> i.onSingleModuleReloaded(old));
             return null;
         }
 
         ApplicationInfo app = pkg.applicationInfo;
-        if (app.metaData != null && app.metaData.containsKey("xposedminversion")) {
-            InstalledModule module = new InstalledModule(pkg);
+        var modernApk = getModernModuleApk(app);
+        if (modernApk != null || isLegacyModule(app)) {
+            InstalledModule module = new InstalledModule(pkg, modernApk);
             installedModules.put(Pair.create(packageName, userId), module);
-            for (ModuleListener listener : listeners) {
-                listener.onSingleInstalledModuleReloaded();
-            }
+            listeners.forEach(i -> i.onSingleModuleReloaded(module));
             return module;
         } else {
             InstalledModule old = installedModules.remove(Pair.create(packageName, userId));
-            if (old != null) {
-                for (ModuleListener listener : listeners) {
-                    listener.onSingleInstalledModuleReloaded();
-                }
-            }
+            if (old != null) listeners.forEach(i -> i.onSingleModuleReloaded(old));
             return null;
         }
     }
 
+    @Nullable
     public InstalledModule getModule(String packageName, int userId) {
-        return installedModules.get(Pair.create(packageName, userId));
+        return modulesLoaded ? installedModules.get(Pair.create(packageName, userId)) : null;
     }
 
+    @Nullable
     public InstalledModule getModule(String packageName) {
         return getModule(packageName, 0);
     }
 
-    public Map<Pair<String, Integer>, InstalledModule> getModules() {
-        return installedModules;
+    @Nullable
+    synchronized public Map<Pair<String, Integer>, InstalledModule> getModules() {
+        return modulesLoaded ? installedModules : null;
     }
 
     public boolean setModuleEnabled(String packageName, boolean enabled) {
@@ -176,12 +219,11 @@ public final class ModuleUtil {
     }
 
     public int getEnabledModulesCount() {
-        return enabledModules.size();
+        return modulesLoaded ? enabledModules.size() : -1;
     }
 
     public void addListener(ModuleListener listener) {
-        if (!listeners.contains(listener))
-            listeners.add(listener);
+        listeners.add(listener);
     }
 
     public void removeListener(ModuleListener listener) {
@@ -193,7 +235,13 @@ public final class ModuleUtil {
          * Called whenever one (previously or now) installed module has been
          * reloaded
          */
-        void onSingleInstalledModuleReloaded();
+        default void onSingleModuleReloaded(InstalledModule module) {
+
+        }
+
+        default void onModulesReloaded() {
+
+        }
     }
 
     public class InstalledModule {
@@ -202,36 +250,71 @@ public final class ModuleUtil {
         public final String packageName;
         public final String versionName;
         public final long versionCode;
+        public final boolean legacy;
         public final int minVersion;
+        public final int targetVersion;
+        public final boolean staticScope;
         public final long installTime;
         public final long updateTime;
-        public ApplicationInfo app;
-        public PackageInfo pkg;
-        private String appName; // loaded lazyily
-        private String description; // loaded lazyily
-        private List<String> scopeList; // loaded lazyily
+        public final ApplicationInfo app;
+        public final PackageInfo pkg;
+        private String appName; // loaded lazily
+        private String description; // loaded lazily
+        private List<String> scopeList; // loaded lazily
 
-        private InstalledModule(PackageInfo pkg) {
-            this.app = pkg.applicationInfo;
+        private InstalledModule(PackageInfo pkg, ZipFile modernModuleApk) {
+            app = pkg.applicationInfo;
             this.pkg = pkg;
-            this.userId = pkg.applicationInfo.uid / 100000;
-            this.packageName = pkg.packageName;
-            this.versionName = pkg.versionName;
+            userId = pkg.applicationInfo.uid / App.PER_USER_RANGE;
+            packageName = pkg.packageName;
+            versionName = pkg.versionName;
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                this.versionCode = pkg.versionCode;
+                versionCode = pkg.versionCode;
             } else {
-                this.versionCode = pkg.getLongVersionCode();
+                versionCode = pkg.getLongVersionCode();
             }
-            this.installTime = pkg.firstInstallTime;
-            this.updateTime = pkg.lastUpdateTime;
+            installTime = pkg.firstInstallTime;
+            updateTime = pkg.lastUpdateTime;
+            legacy = modernModuleApk == null;
 
-            Object minVersionRaw = app.metaData.get("xposedminversion");
-            if (minVersionRaw instanceof Integer) {
-                this.minVersion = (Integer) minVersionRaw;
-            } else if (minVersionRaw instanceof String) {
-                this.minVersion = extractIntPart((String) minVersionRaw);
+            if (legacy) {
+                Object minVersionRaw = app.metaData.get("xposedminversion");
+                if (minVersionRaw instanceof Integer) {
+                    minVersion = (Integer) minVersionRaw;
+                } else if (minVersionRaw instanceof String) {
+                    minVersion = extractIntPart((String) minVersionRaw);
+                } else {
+                    minVersion = 0;
+                }
+                targetVersion = minVersion; // legacy modules don't have a target version
+                staticScope = false;
             } else {
-                this.minVersion = 0;
+                int minVersion = 100;
+                int targetVersion = 100;
+                boolean staticScope = false;
+                try (modernModuleApk) {
+                    var propEntry = modernModuleApk.getEntry("META-INF/xposed/module.prop");
+                    if (propEntry != null) {
+                        var prop = new Properties();
+                        prop.load(modernModuleApk.getInputStream(propEntry));
+                        minVersion = extractIntPart(prop.getProperty("minApiVersion"));
+                        targetVersion = extractIntPart(prop.getProperty("targetApiVersion"));
+                        staticScope = TextUtils.equals(prop.getProperty("staticScope"), "true");
+                    }
+                    var scopeEntry = modernModuleApk.getEntry("META-INF/xposed/scope.list");
+                    if (scopeEntry != null) {
+                        try (var reader = new BufferedReader(new InputStreamReader(modernModuleApk.getInputStream(scopeEntry)))) {
+                            scopeList = reader.lines().collect(Collectors.toList());
+                        }
+                    } else {
+                        scopeList = Collections.emptyList();
+                    }
+                } catch (IOException | OutOfMemoryError e) {
+                    Log.e(App.TAG, "Error while closing modern module APK", e);
+                }
+                this.minVersion = minVersion;
+                this.targetVersion = targetVersion;
+                this.staticScope = staticScope;
             }
         }
 
@@ -246,9 +329,10 @@ public final class ModuleUtil {
         }
 
         public String getDescription() {
-            if (this.description == null) {
+            if (this.description != null) return this.description;
+            String descriptionTmp = "";
+            if (legacy) {
                 Object descriptionRaw = app.metaData.get("xposeddescription");
-                String descriptionTmp = null;
                 if (descriptionRaw instanceof String) {
                     descriptionTmp = ((String) descriptionRaw).trim();
                 } else if (descriptionRaw instanceof Integer) {
@@ -259,32 +343,45 @@ public final class ModuleUtil {
                     } catch (Exception ignored) {
                     }
                 }
-                this.description = (descriptionTmp != null) ? descriptionTmp : "";
+            } else {
+                var des = app.loadDescription(pm);
+                if (des != null) descriptionTmp = des.toString();
             }
+            this.description = descriptionTmp;
             return this.description;
         }
 
         public List<String> getScopeList() {
-            if (scopeList == null) {
-                try {
-                    int scopeListResourceId = app.metaData.getInt("xposedscope");
-                    if (scopeListResourceId != 0) {
-                        scopeList = Arrays.asList(pm.getResourcesForApplication(app).getStringArray(scopeListResourceId));
-                    } else {
-                        String scopeListString = app.metaData.getString("xposedscope");
-                        if (scopeListString != null)
-                            scopeList = Arrays.asList(scopeListString.split(";"));
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
+            if (scopeList != null) return scopeList;
+            List<String> list = null;
+            try {
+                int scopeListResourceId = app.metaData.getInt("xposedscope");
+                if (scopeListResourceId != 0) {
+                    list = Arrays.asList(pm.getResourcesForApplication(app).getStringArray(scopeListResourceId));
+                } else {
+                    String scopeListString = app.metaData.getString("xposedscope");
+                    if (scopeListString != null)
+                        list = Arrays.asList(scopeListString.split(";"));
                 }
-                RepoLoader repoLoader = RepoLoader.getInstance();
-                if (scopeList == null && repoLoader.isRepoLoaded()) {
-                    OnlineModule module = repoLoader.getOnlineModule(packageName);
-                    if (module != null && module.getScope() != null) {
-                        scopeList = module.getScope();
-                    }
+            } catch (Exception ignored) {
+            }
+            if (list == null) {
+                OnlineModule module = RepoLoader.getInstance().getOnlineModule(packageName);
+                if (module != null && module.getScope() != null) {
+                    list = module.getScope();
                 }
+            }
+            if (list != null) {
+                //For historical reasons, legacy modules use the opposite name.
+                //https://github.com/rovo89/XposedBridge/commit/6b49688c929a7768f3113b4c65b429c7a7032afa
+                list.replaceAll(s ->
+                    switch (s) {
+                        case "android" -> "system";
+                        case "system" -> "android";
+                        default -> s;
+                    }
+                );
+                scopeList = list;
             }
             return scopeList;
         }

@@ -1,24 +1,38 @@
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
+
+pluginManagement {
     repositories {
+        gradlePluginPortal()
         google()
         mavenCentral()
     }
 }
 
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    repositories {
+        google()
+        mavenCentral()
+        mavenLocal {
+            content {
+                includeGroup("io.github.libxposed")
+            }
+        }
+    }
+    versionCatalogs {
+        create("libs")
+    }
+}
+
 rootProject.name = "LSPosed"
 include(
-    ":core",
-    ":hiddenapi-stubs",
     ":app",
-    ":service",
-    ":interface",
-    ":hiddenapi-bridge",
-    ":manager-service"
+    ":core",
+    ":daemon",
+    ":dex2oat",
+    ":hiddenapi:stubs",
+    ":hiddenapi:bridge",
+    ":magisk-loader",
+    ":services:manager-service",
+    ":services:daemon-service",
 )
-
-val serviceRoot = "service"
-project(":interface").projectDir = file("$serviceRoot${File.separator}interface")
-project(":service").projectDir = file("$serviceRoot${File.separator}service")
-
-buildCache { local { removeUnusedEntriesAfterDays = 1 } }

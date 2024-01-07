@@ -19,13 +19,14 @@
 
 package org.lsposed.manager.ui.fragment;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.Menu;
+import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -33,22 +34,24 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.SearchView;
+import androidx.core.view.MenuProvider;
+import androidx.recyclerview.widget.ConcatAdapter;
 import androidx.recyclerview.widget.LinearLayoutManager;
-
-import com.google.android.material.snackbar.Snackbar;
+import androidx.recyclerview.widget.RecyclerView;
 
 import org.lsposed.manager.App;
+import org.lsposed.manager.ConfigManager;
 import org.lsposed.manager.R;
+import org.lsposed.manager.adapters.AppHelper;
 import org.lsposed.manager.adapters.ScopeAdapter;
 import org.lsposed.manager.databinding.FragmentAppListBinding;
 import org.lsposed.manager.util.BackupUtils;
 import org.lsposed.manager.util.ModuleUtil;
 
-import java.util.Locale;
-
+import rikka.material.app.LocaleDelegate;
 import rikka.recyclerview.RecyclerViewKt;
 
-public class AppListFragment extends BaseFragment {
+public class AppListFragment extends BaseFragment implements MenuProvider {
 
     public SearchView searchView;
     private ScopeAdapter scopeAdapter;
@@ -59,6 +62,15 @@ public class AppListFragment extends BaseFragment {
     public ActivityResultLauncher<String> backupLauncher;
     public ActivityResultLauncher<String[]> restoreLauncher;
 
+    private final RecyclerView.AdapterDataObserver observer = new RecyclerView.AdapterDataObserver() {
+        @Override
+        public void onChanged() {
+            if (binding != null && scopeAdapter != null) {
+                binding.swipeRefreshLayout.setRefreshing(!scopeAdapter.isLoaded());
+            }
+        }
+    };
+
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -67,10 +79,9 @@ public class AppListFragment extends BaseFragment {
             return binding.getRoot();
         }
         binding.appBar.setLiftable(true);
-        binding.appBar.setLifted(true);
         String title;
         if (module.userId != 0) {
-            title = String.format(Locale.ROOT, "%s (%d)", module.getAppName(), module.userId);
+            title = String.format(LocaleDelegate.getDefaultLocale(), "%s (%d)", module.getAppName(), module.userId);
         } else {
             title = module.getAppName();
         }
@@ -78,15 +89,36 @@ public class AppListFragment extends BaseFragment {
 
         scopeAdapter = new ScopeAdapter(this, module);
         scopeAdapter.setHasStableIds(true);
-        binding.recyclerView.setAdapter(scopeAdapter);
+        scopeAdapter.registerAdapterDataObserver(observer);
+        var concatAdapter = new ConcatAdapter();
+        concatAdapter.addAdapter(scopeAdapter.switchAdaptor);
+        concatAdapter.addAdapter(scopeAdapter);
+        binding.recyclerView.setAdapter(concatAdapter);
         binding.recyclerView.setHasFixedSize(true);
         binding.recyclerView.setLayoutManager(new LinearLayoutManager(requireActivity()));
+        binding.recyclerView.getBorderViewDelegate().setBorderVisibilityChangedListener((top, oldTop, bottom, oldBottom) -> binding.appBar.setLifted(!top));
         RecyclerViewKt.fixEdgeEffect(binding.recyclerView, false, true);
-        binding.swipeRefreshLayout.setOnRefreshListener(() -> scopeAdapter.refresh());
-
+        binding.swipeRefreshLayout.setOnRefreshListener(() -> scopeAdapter.refresh(true));
+        binding.swipeRefreshLayout.setProgressViewEndTarget(true, binding.swipeRefreshLayout.getProgressViewEndOffset());
+        Intent intent = AppHelper.getSettingsIntent(module.packageName, module.userId);
+        if (intent == null) {
+            binding.fab.setVisibility(View.GONE);
+        } else {
+            binding.fab.setVisibility(View.VISIBLE);
+            binding.fab.setOnClickListener(v -> ConfigManager.startActivityAsUserWithFeature(intent, module.userId));
+        }
         searchListener = scopeAdapter.getSearchListener();
 
-        setupToolbar(binding.toolbar, title, R.menu.menu_app_list, view -> requireActivity().getOnBackPressedDispatcher().onBackPressed());
+        setupToolbar(binding.toolbar, binding.clickView, title, R.menu.menu_app_list, view -> requireActivity().getOnBackPressedDispatcher().onBackPressed());
+        View.OnClickListener l = v -> {
+            if (searchView.isIconified()) {
+                binding.recyclerView.smoothScrollToPosition(0);
+                binding.appBar.setExpanded(true, true);
+            }
+        };
+        binding.toolbar.setOnClickListener(l);
+        binding.clickView.setOnClickListener(l);
+
         return binding.getRoot();
     }
 
@@ -94,7 +126,9 @@ public class AppListFragment extends BaseFragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         if (module == null) {
-            getNavController().navigate(R.id.action_app_list_fragment_to_modules_fragment);
+            if (!safeNavigate(R.id.action_app_list_fragment_to_modules_fragment)) {
+                safeNavigate(R.id.modules_nav);
+            }
         }
     }
 
@@ -106,8 +140,13 @@ public class AppListFragment extends BaseFragment {
         int moduleUserId = args.getModuleUserId();
 
         module = ModuleUtil.getInstance().getModule(modulePackageName, moduleUserId);
+        if (module == null) {
+            if (!safeNavigate(R.id.action_app_list_fragment_to_modules_fragment)) {
+                safeNavigate(R.id.modules_nav);
+            }
+        }
 
-        backupLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument(),
+        backupLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument("application/gzip"),
                 uri -> {
                     if (uri == null) return;
                     runAsync(() -> {
@@ -115,11 +154,7 @@ public class AppListFragment extends BaseFragment {
                             BackupUtils.backup(uri, modulePackageName);
                         } catch (Exception e) {
                             var text = App.getInstance().getString(R.string.settings_backup_failed2, e.getMessage());
-                            if (binding != null && isResumed()) {
-                                Snackbar.make(binding.snackbar, text, Snackbar.LENGTH_LONG).show();
-                            } else {
-                                Toast.makeText(App.getInstance(), text, Toast.LENGTH_LONG).show();
-                            }
+                            showHint(text, false);
                         }
                     });
                 });
@@ -131,11 +166,7 @@ public class AppListFragment extends BaseFragment {
                             BackupUtils.restore(uri, modulePackageName);
                         } catch (Exception e) {
                             var text = App.getInstance().getString(R.string.settings_restore_failed2, e.getMessage());
-                            if (binding != null && isResumed()) {
-                                Snackbar.make(binding.snackbar, text, Snackbar.LENGTH_LONG).show();
-                            } else {
-                                Toast.makeText(App.getInstance(), text, Toast.LENGTH_LONG).show();
-                            }
+                            showHint(text, false);
                         }
                     });
                 });
@@ -155,33 +186,40 @@ public class AppListFragment extends BaseFragment {
     }
 
     @Override
-    public void onDestroy() {
-        if (scopeAdapter != null) scopeAdapter.onDestroy();
-
-        super.onDestroy();
-    }
-
-    @Override
     public void onDestroyView() {
         super.onDestroyView();
-
+        if (scopeAdapter != null) scopeAdapter.unregisterAdapterDataObserver(observer);
         binding = null;
     }
 
     @Override
-    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
-        if (scopeAdapter.onOptionsItemSelected(item)) {
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
+    public boolean onMenuItemSelected(@NonNull MenuItem item) {
+        return scopeAdapter.onOptionsItemSelected(item);
     }
 
     @Override
-    public void onPrepareOptionsMenu(@NonNull Menu menu) {
-        super.onPrepareOptionsMenu(menu);
+    public void onPrepareMenu(@NonNull Menu menu) {
         searchView = (SearchView) menu.findItem(R.id.menu_search).getActionView();
         searchView.setOnQueryTextListener(searchListener);
+        searchView.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(View arg0) {
+                binding.appBar.setExpanded(false, true);
+                binding.recyclerView.setNestedScrollingEnabled(false);
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(View v) {
+                binding.recyclerView.setNestedScrollingEnabled(true);
+            }
+        });
+        searchView.findViewById(androidx.appcompat.R.id.search_edit_frame).setLayoutDirection(View.LAYOUT_DIRECTION_INHERIT);
         scopeAdapter.onPrepareOptionsMenu(menu);
+    }
+
+    @Override
+    public void onCreateMenu(@NonNull Menu menu, @NonNull MenuInflater menuInflater) {
+
     }
 
     @Override

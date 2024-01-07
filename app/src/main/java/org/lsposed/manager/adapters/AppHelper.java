@@ -20,12 +20,14 @@
 
 package org.lsposed.manager.adapters;
 
+import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.os.Parcel;
 import android.view.MenuItem;
 
 import org.lsposed.manager.ConfigManager;
@@ -34,6 +36,7 @@ import org.lsposed.manager.R;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AppHelper {
 
@@ -41,7 +44,9 @@ public class AppHelper {
     public static final int FLAG_SHOW_FOR_ALL_USERS = 0x0400;
     private static List<String> denyList;
     private static List<PackageInfo> appList;
+    private static final ConcurrentHashMap<PackageInfo, CharSequence> appLabel = new ConcurrentHashMap<>();
 
+    @SuppressLint("WrongConstant")
     public static Intent getSettingsIntent(String packageName, int userId) {
         Intent intentToResolve = new Intent(Intent.ACTION_MAIN);
         intentToResolve.addCategory(SETTINGS_CATEGORY);
@@ -49,7 +54,7 @@ public class AppHelper {
 
         List<ResolveInfo> ris = ConfigManager.queryIntentActivitiesAsUser(intentToResolve, 0, userId);
 
-        if (ris.size() <= 0) {
+        if (ris.size() == 0) {
             return getLaunchIntentForPackage(packageName, userId);
         }
 
@@ -61,20 +66,21 @@ public class AppHelper {
         return intent;
     }
 
+    @SuppressLint("WrongConstant")
     public static Intent getLaunchIntentForPackage(String packageName, int userId) {
         Intent intentToResolve = new Intent(Intent.ACTION_MAIN);
         intentToResolve.addCategory(Intent.CATEGORY_INFO);
         intentToResolve.setPackage(packageName);
         List<ResolveInfo> ris = ConfigManager.queryIntentActivitiesAsUser(intentToResolve, 0, userId);
 
-        if (ris.size() <= 0) {
+        if (ris.size() == 0) {
             intentToResolve.removeCategory(Intent.CATEGORY_INFO);
             intentToResolve.addCategory(Intent.CATEGORY_LAUNCHER);
             intentToResolve.setPackage(packageName);
             ris = ConfigManager.queryIntentActivitiesAsUser(intentToResolve, 0, userId);
         }
 
-        if (ris.size() <= 0) {
+        if (ris.size() == 0) {
             return null;
         }
 
@@ -111,38 +117,53 @@ public class AppHelper {
 
     public static Comparator<PackageInfo> getAppListComparator(int sort, PackageManager pm) {
         ApplicationInfo.DisplayNameComparator displayNameComparator = new ApplicationInfo.DisplayNameComparator(pm);
-        switch (sort) {
-            case 7:
-                return Collections.reverseOrder(Comparator.comparingLong((PackageInfo a) -> a.lastUpdateTime));
-            case 6:
-                return Comparator.comparingLong((PackageInfo a) -> a.lastUpdateTime);
-            case 5:
-                return Collections.reverseOrder(Comparator.comparingLong((PackageInfo a) -> a.firstInstallTime));
-            case 4:
-                return Comparator.comparingLong((PackageInfo a) -> a.firstInstallTime);
-            case 3:
-                return Collections.reverseOrder(Comparator.comparing(a -> a.packageName));
-            case 2:
-                return Comparator.comparing(a -> a.packageName);
-            case 1:
-                return Collections.reverseOrder((PackageInfo a, PackageInfo b) -> displayNameComparator.compare(a.applicationInfo, b.applicationInfo));
-            case 0:
-            default:
-                return (PackageInfo a, PackageInfo b) -> displayNameComparator.compare(a.applicationInfo, b.applicationInfo);
-        }
+        return switch (sort) {
+            case 7 ->
+                    Collections.reverseOrder(Comparator.comparingLong((PackageInfo a) -> a.lastUpdateTime));
+            case 6 -> Comparator.comparingLong((PackageInfo a) -> a.lastUpdateTime);
+            case 5 ->
+                    Collections.reverseOrder(Comparator.comparingLong((PackageInfo a) -> a.firstInstallTime));
+            case 4 -> Comparator.comparingLong((PackageInfo a) -> a.firstInstallTime);
+            case 3 -> Collections.reverseOrder(Comparator.comparing(a -> a.packageName));
+            case 2 -> Comparator.comparing(a -> a.packageName);
+            case 1 ->
+                    Collections.reverseOrder((PackageInfo a, PackageInfo b) -> displayNameComparator.compare(a.applicationInfo, b.applicationInfo));
+            default ->
+                    (PackageInfo a, PackageInfo b) -> displayNameComparator.compare(a.applicationInfo, b.applicationInfo);
+        };
     }
 
-    public static List<PackageInfo> getAppList(boolean force) {
+    synchronized public static List<PackageInfo> getAppList(boolean force) {
         if (appList == null || force) {
             appList = ConfigManager.getInstalledPackagesFromAllUsers(PackageManager.GET_META_DATA | PackageManager.MATCH_UNINSTALLED_PACKAGES, true);
+            PackageInfo system = null;
+            for (var app : appList) {
+                if ("android".equals(app.packageName)) {
+                    var p = Parcel.obtain();
+                    app.writeToParcel(p, 0);
+                    p.setDataPosition(0);
+                    system = PackageInfo.CREATOR.createFromParcel(p);
+                    system.packageName = "system";
+                    system.applicationInfo.packageName = system.packageName;
+                    break;
+                }
+            }
+            if (system != null) {
+                appList.add(system);
+            }
         }
         return appList;
     }
 
-    public static List<String> getDenyList(boolean force) {
+    synchronized public static List<String> getDenyList(boolean force) {
         if (denyList == null || force) {
             denyList = ConfigManager.getDenyListPackages();
         }
         return denyList;
+    }
+
+    public static CharSequence getAppLabel(PackageInfo info, PackageManager pm) {
+        if (info == null || info.applicationInfo == null) return null;
+        return appLabel.computeIfAbsent(info, i -> i.applicationInfo.loadLabel(pm));
     }
 }

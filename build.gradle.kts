@@ -14,41 +14,107 @@
  * You should have received a copy of the GNU General Public License
  * along with LSPosed.  If not, see <https://www.gnu.org/licenses/>.
  *
- * Copyright (C) 2021 LSPosed Contributors
+ * Copyright (C) 2021 - 2022 LSPosed Contributors
  */
-import org.eclipse.jgit.api.Git
-import org.eclipse.jgit.internal.storage.file.FileRepository
 
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
+import com.android.build.api.dsl.ApplicationDefaultConfig
+import com.android.build.api.dsl.CommonExtension
+import com.android.build.gradle.api.AndroidBasePlugin
+
+plugins {
+    alias(libs.plugins.lsplugin.cmaker)
+    alias(libs.plugins.lsplugin.jgit)
+    alias(libs.plugins.agp.lib) apply false
+    alias(libs.plugins.agp.app) apply false
+    alias(libs.plugins.nav.safeargs) apply false
+}
+
+cmaker {
+    default {
+        arguments.addAll(
+            arrayOf(
+                "-DEXTERNAL_ROOT=${File(rootDir.absolutePath, "external")}",
+                "-DCORE_ROOT=${File(rootDir.absolutePath, "core/src/main/jni")}",
+                "-DANDROID_STL=none"
+            )
+        )
+        val flags = arrayOf(
+            "-DINJECTED_AID=$injectedPackageUid",
+            "-Wno-gnu-string-literal-operator-template",
+            "-Wno-c++2b-extensions",
+        )
+        cFlags.addAll(flags)
+        cppFlags.addAll(flags)
+        abiFilters("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
     }
-    val navVersion by extra("2.4.0-alpha10")
-    val agpVersion by extra("7.0.3")
-    dependencies {
-        classpath("com.android.tools.build:gradle:$agpVersion")
-        classpath("org.eclipse.jgit:org.eclipse.jgit:5.12.0.202106070339-r")
-        classpath("androidx.navigation:navigation-safe-args-gradle-plugin:$navVersion")
+    buildTypes {
+        if (it.name == "release") {
+            arguments += "-DDEBUG_SYMBOLS_PATH=${
+                layout.buildDirectory.dir("symbols").get().asFile.absolutePath
+            }"
+        }
     }
 }
 
-val repo = FileRepository(rootProject.file(".git"))
-val refId = repo.refDatabase.exactRef("refs/remotes/origin/master").objectId!!
-val commitCount = Git(repo).log().add(refId).call().count()
+val repo = jgit.repo()
+val commitCount = (repo?.commitCount("refs/remotes/origin/master") ?: 1) + 4200
+val latestTag = repo?.latestTag?.removePrefix("v") ?: "1.0"
+
+val injectedPackageName by extra("com.android.shell")
+val injectedPackageUid by extra(2000)
 
 val defaultManagerPackageName by extra("org.lsposed.manager")
-val apiCode by extra(93)
-val verCode by extra(commitCount + 4200)
-val verName by extra("1.6.2")
-val androidTargetSdkVersion by extra(31)
+val verCode by extra(commitCount)
+val verName by extra(latestTag)
+val androidTargetSdkVersion by extra(34)
 val androidMinSdkVersion by extra(27)
-val androidBuildToolsVersion by extra("31.0.0")
-val androidCompileSdkVersion by extra(31)
-val androidCompileNdkVersion by extra("23.0.7599858")
-val androidSourceCompatibility by extra(JavaVersion.VERSION_11)
-val androidTargetCompatibility by extra(JavaVersion.VERSION_11)
+val androidBuildToolsVersion by extra("34.0.0")
+val androidCompileSdkVersion by extra(34)
+val androidCompileNdkVersion by extra("26.1.10909125")
+val androidSourceCompatibility by extra(JavaVersion.VERSION_17)
+val androidTargetCompatibility by extra(JavaVersion.VERSION_17)
 
 tasks.register("Delete", Delete::class) {
-    delete(rootProject.buildDir)
+    delete(rootProject.layout.buildDirectory)
+}
+
+subprojects {
+    plugins.withType(AndroidBasePlugin::class.java) {
+        extensions.configure(CommonExtension::class.java) {
+            compileSdk = androidCompileSdkVersion
+            ndkVersion = androidCompileNdkVersion
+            buildToolsVersion = androidBuildToolsVersion
+
+            externalNativeBuild {
+                cmake {
+                    version = "3.22.1+"
+                }
+            }
+
+            defaultConfig {
+                minSdk = androidMinSdkVersion
+                if (this is ApplicationDefaultConfig) {
+                    targetSdk = androidTargetSdkVersion
+                    versionCode = verCode
+                    versionName = verName
+                }
+            }
+
+            lint {
+                abortOnError = true
+                checkReleaseBuilds = false
+            }
+
+            compileOptions {
+                sourceCompatibility = androidSourceCompatibility
+                targetCompatibility = androidTargetCompatibility
+            }
+        }
+    }
+    plugins.withType(JavaPlugin::class.java) {
+        extensions.configure(JavaPluginExtension::class.java) {
+            sourceCompatibility = androidSourceCompatibility
+            targetCompatibility = androidTargetCompatibility
+        }
+    }
 }

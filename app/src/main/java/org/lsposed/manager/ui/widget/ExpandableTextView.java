@@ -21,10 +21,14 @@ package org.lsposed.manager.ui.widget;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.graphics.Typeface;
+import android.os.Bundle;
+import android.os.Parcelable;
 import android.text.Layout;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
+import android.text.TextPaint;
 import android.text.method.LinkMovementMethod;
 import android.text.style.ClickableSpan;
 import android.transition.TransitionManager;
@@ -32,19 +36,21 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.google.android.material.textview.MaterialTextView;
+
 import org.lsposed.manager.R;
 
-public class ExpandableTextView extends TextView {
+public class ExpandableTextView extends MaterialTextView {
     private CharSequence text = null;
     private int nextLines = 0;
     private final int maxLines;
     private final SpannableString collapse;
     private final SpannableString expand;
     private final SpannableStringBuilder sb = new SpannableStringBuilder();
+    private int lineCount = 0;
 
     public ExpandableTextView(Context context) {
         this(context, null);
@@ -65,6 +71,11 @@ public class ExpandableTextView extends TextView {
                 setMaxLines(nextLines);
                 ExpandableTextView.super.setText(text);
             }
+
+            @Override
+            public void updateDrawState(@NonNull TextPaint ds) {
+                ds.setTypeface(Typeface.DEFAULT_BOLD);
+            }
         };
         collapse.setSpan(span, 0, collapse.length(), 0);
         expand = new SpannableString(context.getString(R.string.expand));
@@ -80,27 +91,41 @@ public class ExpandableTextView extends TextView {
 
     @Override
     public boolean onPreDraw() {
-        var lineCount = getLayout().getLineCount();
+        this.getViewTreeObserver().removeOnPreDrawListener(this);
+        if (lineCount == 0) {
+            lineCount = getLayout().getLineCount();
+        }
         if (lineCount > maxLines) {
-            SpannableString s;
-            int end;
+            int hintTextOffsetEnd;
             if (maxLines == getMaxLines()) {
                 nextLines = lineCount + 1;
-                end = getLayout().getLineStart(getMaxLines() - 1);
-                s = expand;
-            } else {
+                hintTextOffsetEnd = getLayout().getLineStart(getMaxLines() - 1);
+                setTextWithSpan(text, hintTextOffsetEnd - 1, expand);
+            } else if (nextLines == getMaxLines()) {
                 nextLines = maxLines;
-                end = text.length();
-                s = collapse;
+                hintTextOffsetEnd = getLayout().getLineStart(getMaxLines() - 1);
+                setTextWithSpan(text, hintTextOffsetEnd, collapse);
             }
-            sb.clearSpans();
-            sb.clear();
-            sb.append(text, 0, end - 1);
-            sb.append("\n");
-            sb.append(s);
-            super.setText(sb, BufferType.NORMAL);
         }
         return super.onPreDraw();
+    }
+
+    private void setTextWithSpan(CharSequence text, int textOffsetEnd,
+                                 SpannableString sbStr) {
+        sb.clearSpans();
+        sb.clear();
+        sb.append(text, 0, textOffsetEnd);
+        sb.append("\n");
+        sb.append(sbStr);
+        super.setText(sb, BufferType.NORMAL);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (getLayout() != null) {
+            lineCount = getLayout().getLineCount();
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -125,6 +150,24 @@ public class ExpandableTextView extends TextView {
         }
 
         return false;
+    }
+
+    @Override
+    public Parcelable onSaveInstanceState() {
+        Bundle bundle = new Bundle();
+        bundle.putParcelable("superState", super.onSaveInstanceState());
+        bundle.putInt("maxLines", getMaxLines());
+        return bundle;
+    }
+
+    @Override
+    public void onRestoreInstanceState(Parcelable state) {
+        if (state instanceof Bundle) {
+            Bundle bundle = (Bundle) state;
+            setMaxLines(bundle.getInt("maxLines"));
+            state = bundle.getParcelable("superState");
+        }
+        super.onRestoreInstanceState(state);
     }
 
 }

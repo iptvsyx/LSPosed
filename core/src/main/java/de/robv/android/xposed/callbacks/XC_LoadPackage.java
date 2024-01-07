@@ -21,9 +21,16 @@
 package de.robv.android.xposed.callbacks;
 
 import android.content.pm.ApplicationInfo;
+import android.os.Bundle;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge.CopyOnWriteSortedSet;
+import io.github.libxposed.api.XposedModuleInterface;
 
 /**
  * This class is only used for internal purposes, except for the {@link LoadPackageParam}
@@ -57,8 +64,8 @@ public abstract class XC_LoadPackage extends XCallback implements IXposedHookLoa
         /**
          * @hide
          */
-        public LoadPackageParam(CopyOnWriteSortedSet<XC_LoadPackage> callbacks) {
-            super(callbacks);
+        public LoadPackageParam(CopyOnWriteArraySet<XC_LoadPackage> callbacks) {
+            super(callbacks.toArray(new XCallback[0]));
         }
 
         /**

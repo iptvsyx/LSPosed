@@ -15,12 +15,12 @@
  * along with LSPosed.  If not, see <https://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2020 EdXposed Contributors
- * Copyright (C) 2021 LSPosed Contributors
+ * Copyright (C) 2021 - 2022 LSPosed Contributors
  */
 
 package de.robv.android.xposed;
 
-import static org.lsposed.lspd.config.LSPApplicationServiceClient.serviceClient;
+import static org.lsposed.lspd.core.ApplicationServiceClient.serviceClient;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -31,7 +31,7 @@ import android.util.Log;
 
 import com.android.internal.util.XmlUtils;
 
-import org.lsposed.lspd.BuildConfig;
+import org.lsposed.lspd.core.BuildConfig;
 import org.lsposed.lspd.util.MetaDataReader;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -50,6 +50,7 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import de.robv.android.xposed.services.FileResult;
@@ -160,29 +161,27 @@ public final class XSharedPreferences implements SharedPreferences {
      */
     public XSharedPreferences(String packageName, String prefFileName) {
         boolean newModule = false;
-        Set<String> modules = XposedInit.getLoadedModules();
-        for (String m : modules) {
-            if (m.contains("/" + packageName + "-")) {
-                boolean isModule = false;
-                int xposedminversion = -1;
-                boolean xposedsharedprefs = false;
-                try {
-                    Map<String, Object> metaData = MetaDataReader.getMetaData(new File(m));
-                    isModule = metaData.containsKey("xposedminversion");
-                    if (isModule) {
-                        Object minVersionRaw = metaData.get("xposedminversion");
-                        if (minVersionRaw instanceof Integer) {
-                            xposedminversion = (Integer) minVersionRaw;
-                        } else if (minVersionRaw instanceof String) {
-                            xposedminversion = MetaDataReader.extractIntPart((String) minVersionRaw);
-                        }
-                        xposedsharedprefs = metaData.containsKey("xposedsharedprefs");
+        var m = XposedInit.getLoadedModules().getOrDefault(packageName, Optional.empty());
+        if (m.isPresent()) {
+            boolean isModule = false;
+            int xposedminversion = -1;
+            boolean xposedsharedprefs = false;
+            try {
+                Map<String, Object> metaData = MetaDataReader.getMetaData(new File(m.get()));
+                isModule = metaData.containsKey("xposedminversion");
+                if (isModule) {
+                    Object minVersionRaw = metaData.get("xposedminversion");
+                    if (minVersionRaw instanceof Integer) {
+                        xposedminversion = (Integer) minVersionRaw;
+                    } else if (minVersionRaw instanceof String) {
+                        xposedminversion = MetaDataReader.extractIntPart((String) minVersionRaw);
                     }
-                } catch (NumberFormatException | IOException e) {
-                    Log.w(TAG, "Apk parser fails: " + e);
+                    xposedsharedprefs = metaData.containsKey("xposedsharedprefs");
                 }
-                newModule = isModule && (xposedminversion > 92 || xposedsharedprefs);
+            } catch (NumberFormatException | IOException e) {
+                Log.w(TAG, "Apk parser fails: " + e);
             }
+            newModule = isModule && (xposedminversion > 92 || xposedsharedprefs);
         }
         if (newModule) {
             mFile = new File(serviceClient.getPrefsPath(packageName), prefFileName + ".xml");

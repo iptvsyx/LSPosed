@@ -1,3 +1,22 @@
+/*
+ * This file is part of LSPosed.
+ *
+ * LSPosed is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LSPosed is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LSPosed.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Copyright (C) 2022 LSPosed Contributors
+ */
+
 package org.lsposed.manager.util;
 
 import android.util.Log;
@@ -5,6 +24,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import org.lsposed.manager.App;
@@ -15,6 +35,7 @@ import java.io.File;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Locale;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -24,7 +45,6 @@ import okio.Okio;
 
 public class UpdateUtil {
     public static void loadRemoteVersion() {
-        var pref = App.getPreferences();
         var request = new Request.Builder()
                 .url("https://api.github.com/repos/LSPosed/LSPosed/releases/latest")
                 .addHeader("Accept", "application/vnd.github.v3+json")
@@ -35,31 +55,13 @@ public class UpdateUtil {
                 if (!response.isSuccessful()) return;
                 var body = response.body();
                 if (body == null) return;
+                String api = ConfigManager.isBinderAlive() ? ConfigManager.getApi() : "riru";
                 try {
                     var info = JsonParser.parseReader(body.charStream()).getAsJsonObject();
-                    var assets = info.getAsJsonArray("assets").get(0).getAsJsonObject();
-                    var name = assets.get("name").getAsString();
-                    var code = Integer.parseInt(name.split("-", 4)[2]);
-                    var now = Instant.now().getEpochSecond();
-                    var releaseNotes = info.get("body").getAsString();
-                    pref.edit()
-                            .putInt("latest_version", code)
-                            .putLong("latest_check", now)
-                            .putString("release_notes", releaseNotes)
-                            .putBoolean("checked", true)
-                            .apply();
-                    var updatedAt = Instant.parse(assets.get("updated_at").getAsString());
-                    var downloadUrl = assets.get("browser_download_url").getAsString();
-                    var nowZipTime = pref.getLong("zip_time", BuildConfig.BUILD_TIME);
-                    if (updatedAt.isAfter(Instant.ofEpochSecond(nowZipTime))) {
-                        var zip = downloadNewZipSync(downloadUrl, name);
-                        var size = assets.get("size").getAsLong();
-                        if (zip != null && zip.length() == size) {
-                            pref.edit()
-                                    .putLong("zip_time", updatedAt.getEpochSecond())
-                                    .putString("zip_file", zip.getAbsolutePath())
-                                    .apply();
-                        }
+                    var notes = info.get("body").getAsString();
+                    var assetsArray = info.getAsJsonArray("assets");
+                    for (var assets : assetsArray) {
+                        checkAssets(assets.getAsJsonObject(), notes, api.toLowerCase(Locale.ROOT));
                     }
                 } catch (Throwable t) {
                     Log.e(App.TAG, t.getMessage(), t);
@@ -69,11 +71,39 @@ public class UpdateUtil {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e(App.TAG, "loadRemoteVersion: " + e.getMessage());
+                var pref = App.getPreferences();
                 if (pref.getBoolean("checked", false)) return;
                 pref.edit().putBoolean("checked", true).apply();
             }
         };
         App.getOkHttpClient().newCall(request).enqueue(callback);
+    }
+
+    private static void checkAssets(JsonObject assets, String releaseNotes, String api) {
+        var pref = App.getPreferences();
+        var name = assets.get("name").getAsString();
+        var splitName = name.split("-");
+        if (!splitName[3].equals(api)) return;
+        pref.edit()
+                .putInt("latest_version", Integer.parseInt(splitName[2]))
+                .putLong("latest_check", Instant.now().getEpochSecond())
+                .putString("release_notes", releaseNotes)
+                .putString("zip_file", null)
+                .putBoolean("checked", true)
+                .apply();
+        var updatedAt = Instant.parse(assets.get("updated_at").getAsString());
+        var downloadUrl = assets.get("browser_download_url").getAsString();
+        var zipTime = pref.getLong("zip_time", 0);
+        if (!updatedAt.equals(Instant.ofEpochSecond(zipTime))) {
+            var zip = downloadNewZipSync(downloadUrl, name);
+            var size = assets.get("size").getAsLong();
+            if (zip != null && zip.length() == size) {
+                pref.edit()
+                        .putLong("zip_time", updatedAt.getEpochSecond())
+                        .putString("zip_file", zip.getAbsolutePath())
+                        .apply();
+            }
+        }
     }
 
     public static boolean needUpdate() {
@@ -114,8 +144,6 @@ public class UpdateUtil {
         if (!ConfigManager.isBinderAlive()) return false;
         var pref = App.getPreferences();
         var zip = pref.getString("zip_file", null);
-        if (zip == null || !new File(zip).isFile()) return false;
-        var zipTime = pref.getLong("zip_time", BuildConfig.BUILD_TIME);
-        return zipTime > BuildConfig.BUILD_TIME;
+        return zip != null && new File(zip).isFile();
     }
 }

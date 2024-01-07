@@ -27,6 +27,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.util.Log;
 
+import org.lsposed.lspd.ILSPManagerService;
 import org.lsposed.lspd.models.Application;
 import org.lsposed.lspd.models.UserInfo;
 import org.lsposed.manager.adapters.ScopeAdapter;
@@ -35,12 +36,8 @@ import org.lsposed.manager.receivers.LSPManagerServiceHolder;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-
-import io.github.xposed.xposedservice.utils.ParceledListSlice;
+import java.util.Set;
 
 public class ConfigManager {
 
@@ -103,7 +100,7 @@ public class ConfigManager {
         }
     }
 
-    public static boolean setModuleScope(String packageName, HashSet<ScopeAdapter.ApplicationWithEquals> applications) {
+    public static boolean setModuleScope(String packageName, boolean legacy, Set<ScopeAdapter.ApplicationWithEquals> applications) {
         try {
             List<Application> list = new ArrayList<>();
             applications.forEach(application -> {
@@ -112,7 +109,13 @@ public class ConfigManager {
                 app.packageName = application.packageName;
                 list.add(app);
             });
-            return LSPManagerServiceHolder.getService().setModuleScope(packageName, new ParceledListSlice<>(list));
+            if (legacy) {
+                Application app = new Application();
+                app.userId = 0;
+                app.packageName = packageName;
+                list.add(app);
+            }
+            return LSPManagerServiceHolder.getService().setModuleScope(packageName, list);
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
             return false;
@@ -126,7 +129,7 @@ public class ConfigManager {
             if (applications == null) {
                 return list;
             }
-            applications.getList().forEach(application -> {
+            applications.forEach(application -> {
                 if (!application.packageName.equals(packageName)) {
                     list.add(new ScopeAdapter.ApplicationWithEquals(application));
                 }
@@ -137,37 +140,18 @@ public class ConfigManager {
         return list;
     }
 
-    public static boolean isResourceHookEnabled() {
+    public static boolean enableStatusNotification() {
         try {
-            return LSPManagerServiceHolder.getService().isResourceHook();
+            return LSPManagerServiceHolder.getService().enableStatusNotification();
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
             return false;
         }
     }
 
-    public static boolean setResourceHookEnabled(boolean enabled) {
+    public static boolean setEnableStatusNotification(boolean enabled) {
         try {
-            LSPManagerServiceHolder.getService().setResourceHook(enabled);
-            return true;
-        } catch (RemoteException e) {
-            Log.e(App.TAG, Log.getStackTraceString(e));
-            return false;
-        }
-    }
-
-    public static boolean isAddShortcut() {
-        try {
-            return LSPManagerServiceHolder.getService().isAddShortcut();
-        } catch (RemoteException e) {
-            Log.e(App.TAG, Log.getStackTraceString(e));
-            return false;
-        }
-    }
-
-    public static boolean setAddShortcut(boolean enabled) {
-        try {
-            LSPManagerServiceHolder.getService().setAddShortcut(enabled);
+            LSPManagerServiceHolder.getService().setEnableStatusNotification(enabled);
             return true;
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
@@ -233,9 +217,9 @@ public class ConfigManager {
         }
     }
 
-    public static boolean reboot(boolean shutdown) {
+    public static boolean reboot() {
         try {
-            LSPManagerServiceHolder.getService().reboot(shutdown);
+            LSPManagerServiceHolder.getService().reboot();
             return true;
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
@@ -333,12 +317,12 @@ public class ConfigManager {
         }
     }
 
-    public static Map<String, ParcelFileDescriptor> getLogs() {
+    public static String getApi() {
         try {
-            return LSPManagerServiceHolder.getService().getLogs();
+            return LSPManagerServiceHolder.getService().getApi();
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
-            return new HashMap<>();
+            return e.toString();
         }
     }
 
@@ -357,6 +341,34 @@ public class ConfigManager {
             LSPManagerServiceHolder.getService().flashZip(zipPath, outputStream);
         } catch (RemoteException e) {
             Log.e(App.TAG, Log.getStackTraceString(e));
+        }
+    }
+
+    public static boolean isDexObfuscateEnabled() {
+        try {
+            return LSPManagerServiceHolder.getService().getDexObfuscate();
+        } catch (RemoteException e) {
+            Log.e(App.TAG, Log.getStackTraceString(e));
+            return false;
+        }
+    }
+
+    public static boolean setDexObfuscateEnabled(boolean enabled) {
+        try {
+            LSPManagerServiceHolder.getService().setDexObfuscate(enabled);
+            return true;
+        } catch (RemoteException e) {
+            Log.e(App.TAG, Log.getStackTraceString(e));
+            return false;
+        }
+    }
+
+    public static int getDex2OatWrapperCompatibility() {
+        try {
+            return LSPManagerServiceHolder.getService().getDex2OatWrapperCompatibility();
+        } catch (RemoteException e) {
+            Log.e(App.TAG, Log.getStackTraceString(e));
+            return ILSPManagerService.DEX2OAT_CRASHED;
         }
     }
 }

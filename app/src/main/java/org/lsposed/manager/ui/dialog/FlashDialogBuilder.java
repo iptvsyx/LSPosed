@@ -1,8 +1,28 @@
+/*
+ * This file is part of LSPosed.
+ *
+ * LSPosed is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LSPosed is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LSPosed.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Copyright (C) 2022 LSPosed Contributors
+ */
+
 package org.lsposed.manager.ui.dialog;
 
 import static org.lsposed.manager.App.TAG;
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Typeface;
 import android.os.ParcelFileDescriptor;
 import android.text.method.LinkMovementMethod;
@@ -20,7 +40,8 @@ import com.google.android.material.textview.MaterialTextView;
 import org.lsposed.manager.App;
 import org.lsposed.manager.ConfigManager;
 import org.lsposed.manager.R;
-import org.lsposed.manager.databinding.DialogWarningBinding;
+import org.lsposed.manager.databinding.DialogTitleBinding;
+import org.lsposed.manager.databinding.ScrollableDialogBinding;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -33,25 +54,30 @@ public class FlashDialogBuilder extends BlurBehindDialogBuilder {
     private final TextView textView;
     private final BorderNestedScrollView rootView;
 
-    public FlashDialogBuilder(@NonNull Context context) {
-        super(context);
+    public FlashDialogBuilder(@NonNull Context context, DialogInterface.OnClickListener cancel) {
+        super(context, R.style.ThemeOverlay_MaterialAlertDialog_Centered_FullWidthButtons);
         var pref = App.getPreferences();
         var notes = pref.getString("release_notes", "");
         this.zipPath = pref.getString("zip_file", null);
-        setTitle(R.string.update_lsposed);
+        LayoutInflater inflater = LayoutInflater.from(context);
+
+        var title = DialogTitleBinding.inflate(inflater).getRoot();
+        title.setText(R.string.update_lsposed);
+        setCustomTitle(title);
 
         textView = new MaterialTextView(context);
         var text = notes + "\n\n\n" + context.getString(R.string.update_lsposed_msg) + "\n\n";
         textView.setText(text);
         textView.setMovementMethod(LinkMovementMethod.getInstance());
+        textView.setTextIsSelectable(true);
 
-        LayoutInflater inflater = LayoutInflater.from(context);
-        DialogWarningBinding binding = DialogWarningBinding.inflate(inflater, null, false);
-        binding.container.addView(textView);
+        var binding = ScrollableDialogBinding.inflate(inflater, null, false);
+        binding.dialogContainer.addView(textView);
         rootView = binding.getRoot();
         setView(rootView);
+        title.setOnClickListener(v -> rootView.smoothScrollTo(0, 0));
 
-        setNegativeButton(android.R.string.cancel, null);
+        setNegativeButton(android.R.string.cancel, cancel);
         setPositiveButton(R.string.install, null);
         setCancelable(false);
     }

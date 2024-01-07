@@ -20,56 +20,69 @@
 
 package org.lsposed.manager.ui.activity.base;
 
+import android.app.ActivityManager;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.drawable.AdaptiveIconDrawable;
+import android.graphics.drawable.BitmapDrawable;
 import android.os.Bundle;
 import android.view.Window;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.google.android.material.color.DynamicColors;
-import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-
-import org.lsposed.manager.BuildConfig;
-import org.lsposed.manager.ConfigManager;
+import org.lsposed.manager.App;
 import org.lsposed.manager.R;
-import org.lsposed.manager.util.NavUtil;
+import org.lsposed.manager.util.Telemetry;
 import org.lsposed.manager.util.ThemeUtil;
 
-import rikka.core.util.ResourceUtils;
 import rikka.material.app.MaterialActivity;
 
 public class BaseActivity extends MaterialActivity {
+    private static Bitmap icon = null;
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
+        setTheme(R.style.AppTheme);
         super.onCreate(savedInstanceState);
-        if (ThemeUtil.isSystemAccent()) {
-            DynamicColors.applyIfAvailable(this);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (!App.isParasitic) return;
+        for (var task : getSystemService(ActivityManager.class).getAppTasks()) {
+            task.setExcludeFromRecents(false);
         }
-        // make sure the versions are consistent
-        if (BuildConfig.DEBUG) return;
-        if (!ConfigManager.isBinderAlive()) return;
-        var version = ConfigManager.getXposedVersionName();
-        if (BuildConfig.VERSION_NAME.equals(version)) return;
-        new MaterialAlertDialogBuilder(this)
-                .setMessage(BuildConfig.VERSION_NAME.compareTo(version) > 0 ?
-                        R.string.outdated_core : R.string.outdated_manager)
-                .setPositiveButton(android.R.string.ok, (dialog, id) -> {
-                    NavUtil.startURL(this, getString(R.string.about_source));
-                    finish();
-                })
-                .setCancelable(false)
-                .show();
+        if (icon == null) {
+            var drawable = getApplicationInfo().loadIcon(getPackageManager());
+            if (drawable instanceof BitmapDrawable) {
+                icon = ((BitmapDrawable) drawable).getBitmap();
+            } else if (drawable instanceof AdaptiveIconDrawable) {
+                icon = Bitmap.createBitmap(drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+                final Canvas canvas = new Canvas(icon);
+                drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+                drawable.draw(canvas);
+            }
+        }
+        setTaskDescription(new ActivityManager.TaskDescription(getTitle().toString(), icon, getColor(R.color.ic_launcher_background)));
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Telemetry.trackEvent("BaseActivity stop", null);
     }
 
     @Override
     public void onApplyUserThemeResource(@NonNull Resources.Theme theme, boolean isDecorView) {
-        theme.applyStyle(ThemeUtil.getNightThemeStyleRes(this), true);
         if (!ThemeUtil.isSystemAccent()) {
             theme.applyStyle(ThemeUtil.getColorThemeStyleRes(), true);
         }
+        theme.applyStyle(ThemeUtil.getNightThemeStyleRes(this), true);
+        theme.applyStyle(rikka.material.preference.R.style.ThemeOverlay_Rikka_Material3_Preference, true);
     }
 
     @Override
@@ -82,16 +95,6 @@ public class BaseActivity extends MaterialActivity {
         super.onApplyTranslucentSystemBars();
         Window window = getWindow();
         window.setStatusBarColor(Color.TRANSPARENT);
-
-        window.getDecorView().post(() -> {
-            var rootWindowInsets = window.getDecorView().getRootWindowInsets();
-            if (rootWindowInsets != null &&
-                    rootWindowInsets.getSystemWindowInsetBottom() >= Resources.getSystem().getDisplayMetrics().density * 40) {
-                window.setNavigationBarColor(ResourceUtils.resolveColor(getTheme(), android.R.attr.navigationBarColor) & 0x00ffffff | -0x20000000);
-            } else {
-                window.setNavigationBarColor(Color.TRANSPARENT);
-            }
-        });
-
+        window.setNavigationBarColor(Color.TRANSPARENT);
     }
 }
